@@ -1,0 +1,14 @@
+{
+  "id": "klix-filter",
+  "name": "Klix Filter",
+  "version": "1.0.0",
+  "description": "Klix.ba reader with in-app articles, infinite scroll, and saved keyword filters",
+  "entry": "index.jsx",
+  "icon": "assets/klix-app-icon.png",
+  "offline_capable": true,
+  "permissions": {
+    "cross_app_access": "none",
+    "share_with_apps": "none",
+    "chat_log_access": "none"
+  }
+}
