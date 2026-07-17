@@ -1,7 +1,7 @@
 {
   "id": "klix-filter",
   "name": "Klix Filter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Klix.ba reader with in-app articles, infinite scroll, and saved keyword filters",
   "entry": "index.jsx",
   "icon": "assets/klix-app-icon.png",

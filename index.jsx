@@ -390,12 +390,86 @@ function parseArticles(html, sourceKey) {
   return articles.slice(0, 36)
 }
 
+function mergeArticlePages(pages, sourceKey) {
+  const byUrl = new Map()
+  const order = []
+
+  pages.forEach((html) => {
+    parseArticles(html, sourceKey).forEach((article) => {
+      const existing = byUrl.get(article.url)
+      if (!existing) {
+        byUrl.set(article.url, article)
+        order.push(article.url)
+        return
+      }
+
+      // Ranking pages are authoritative for order but often contain only
+      // headlines. Category/home pages later in the batch carry the same URL
+      // with a thumbnail, so merge that richer duplicate instead of dropping
+      // it. This makes cards render images immediately rather than waiting for
+      // the slower article-detail enrichment pass.
+      byUrl.set(article.url, {
+        ...existing,
+        title: existing.title || article.title,
+        image: existing.image || article.image,
+        category: existing.category || article.category,
+      })
+    })
+  })
+
+  return order.map((url) => byUrl.get(url))
+}
+
 async function fetchHtml(url, token) {
   const res = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new Error('Nije dostupno')
   return res.text()
+}
+
+function ReliableImage({ src, token, alt = '', className = '', loading, fallback = null }) {
+  const [displaySrc, setDisplaySrc] = useState(src)
+  const [failed, setFailed] = useState(false)
+  const proxyTriedRef = useRef(false)
+  const objectUrlRef = useRef('')
+
+  useEffect(() => {
+    proxyTriedRef.current = false
+    setFailed(false)
+    setDisplaySrc(src)
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+    objectUrlRef.current = ''
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = ''
+    }
+  }, [src])
+
+  async function retryThroughMobius() {
+    if (!src || proxyTriedRef.current) {
+      setFailed(true)
+      return
+    }
+    proxyTriedRef.current = true
+    try {
+      const res = await fetch(`/api/proxy?url=${encodeURIComponent(src)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('image proxy failed')
+      const blob = await res.blob()
+      if (!blob.type.startsWith('image/')) throw new Error('not an image')
+      const objectUrl = URL.createObjectURL(blob)
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = objectUrl
+      setDisplaySrc(objectUrl)
+    } catch {
+      setFailed(true)
+    }
+  }
+
+  if (!src || failed) return fallback
+  return <img className={className} src={displaySrc} alt={alt} loading={loading} onError={retryThroughMobius} />
 }
 
 async function enrichArticle(article, token) {
@@ -409,8 +483,9 @@ async function enrichArticle(article, token) {
       ...detail,
       // Keep the feed thumbnail stable. Detail fetches often find a larger
       // hero image with a different crop; swapping it into the list creates
-      // the visible zoom-in/zoom-out effect.
-      image: article.image || '',
+      // the visible zoom-in/zoom-out effect. If the list had no thumbnail at
+      // all, use the article image so the card does not stay as a placeholder.
+      image: article.image || detail.image || '',
       heroImage,
     }
   } catch {
@@ -463,16 +538,7 @@ export default function KlixFilter({ appId, token }) {
     try {
       const results = await Promise.all(SOURCES.map(async (source) => {
         const pages = await Promise.all(source.urls.map((url) => fetchHtml(url, token).catch(() => '')))
-        const seen = new Set()
-        const baseArticles = []
-        pages.forEach((html) => {
-          parseArticles(html, source.key).forEach((article) => {
-            if (!seen.has(article.url)) {
-              seen.add(article.url)
-              baseArticles.push(article)
-            }
-          })
-        })
+        const baseArticles = mergeArticlePages(pages, source.key)
         const ranked = baseArticles.slice(0, 40).map((article, index) => ({
           ...article,
           id: `${source.key}-${index + 1}`,
@@ -607,7 +673,7 @@ export default function KlixFilter({ appId, token }) {
           setArticles((prev) => ({
             ...prev,
             [article.source]: (prev[article.source] || []).map((item) =>
-              item.url === article.url ? { ...item, ...detail, image: item.image || '', heroImage: detail.heroImage || item.heroImage } : item
+              item.url === article.url ? { ...item, ...detail, image: item.image || detail.image || '', heroImage: detail.heroImage || item.heroImage } : item
             ),
           }))
         })
@@ -752,7 +818,7 @@ export default function KlixFilter({ appId, token }) {
       </header>
 
       {selectedArticle ? (
-        <ArticleView article={selectedArticle} loading={detailLoading} onBack={closeArticle} />
+        <ArticleView article={selectedArticle} loading={detailLoading} onBack={closeArticle} token={token} />
       ) : (
         <>
           <section className="filterPanel">
@@ -813,7 +879,7 @@ export default function KlixFilter({ appId, token }) {
           {error && <div className="notice error">{error}</div>}
 
           <main className={refreshing ? 'feed isRefreshing' : 'feed'}>
-            {displayedVisible.map((article, index) => <ArticleCard key={article.url} article={article} lead={index === 0} onOpen={openArticle} />)}
+            {displayedVisible.map((article, index) => <ArticleCard key={article.url} article={article} lead={index === 0} onOpen={openArticle} token={token} />)}
             {!status && !error && visible.length === 0 && (
               <div className="emptyState">Sve je sakriveno trenutnim filterima. Ukloni neku riječ da vidiš više članaka.</div>
             )}
@@ -844,7 +910,7 @@ export default function KlixFilter({ appId, token }) {
   )
 }
 
-function ArticleCard({ article, lead, onOpen }) {
+function ArticleCard({ article, lead, onOpen, token }) {
   return (
     <article
       className={lead ? 'card leadCard' : 'card'}
@@ -854,7 +920,16 @@ function ArticleCard({ article, lead, onOpen }) {
       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(article) } }}
     >
       <div className="cardLink">
-        {article.image ? <img className="thumb" src={article.image} alt="" loading="lazy" /> : <div className="thumb fallback" aria-hidden="true"></div>}
+        {article.image ? (
+          <ReliableImage
+            className="thumb"
+            src={article.image}
+            token={token}
+            alt=""
+            loading="lazy"
+            fallback={<div className="thumb fallback" aria-hidden="true"></div>}
+          />
+        ) : <div className="thumb fallback" aria-hidden="true"></div>}
         <div className="body">
           <div className="meta"><span className="category">{article.category}</span><span>#{article.rank}</span><span>{article.source === 'popular' ? 'Najčitanije' : 'Najnovije'}</span></div>
           <h2>{article.title}</h2>
@@ -865,7 +940,7 @@ function ArticleCard({ article, lead, onOpen }) {
   )
 }
 
-function ArticleView({ article, loading, onBack }) {
+function ArticleView({ article, loading, onBack, token }) {
   const blocks = (article.blocks && article.blocks.length)
     ? article.blocks
     : (article.paragraphs || []).map((text) => ({ type: 'p', text }))
@@ -874,7 +949,7 @@ function ArticleView({ article, loading, onBack }) {
       <button className="backButton" onClick={onBack}>← Nazad na listu</button>
       <div className="readerMeta"><span>{article.category}</span><span>{article.source === 'popular' ? 'Najčitanije' : 'Najnovije'}</span>{article.author ? <span>{article.author}</span> : null}</div>
       <h1>{article.title}</h1>
-      {article.heroImage || article.image ? <img className="readerImage" src={article.heroImage || article.image} alt={article.caption || ''} /> : null}
+      {article.heroImage || article.image ? <ReliableImage className="readerImage" src={article.heroImage || article.image} token={token} alt={article.caption || ''} /> : null}
       {article.caption ? <p className="caption">{article.caption}</p> : null}
       {article.lead ? <p className="readerLead">{article.lead}</p> : null}
       {loading ? <div className="notice">Učitavam tekst članka...</div> : null}
@@ -884,7 +959,7 @@ function ArticleView({ article, loading, onBack }) {
           if (block.type === 'h') return <h3 key={index} className="articleHeading">{block.text}</h3>
           if (block.type === 'img') return (
             <figure key={index} className="inlineFigure">
-              <img src={block.src} alt={block.caption || ''} loading="lazy" />
+              <ReliableImage src={block.src} token={token} alt={block.caption || ''} loading="lazy" />
               {block.caption ? <figcaption>{block.caption}</figcaption> : null}
             </figure>
           )
@@ -894,7 +969,7 @@ function ArticleView({ article, loading, onBack }) {
               <div className="galleryGrid">
                 {block.images.map((image, imageIndex) => (
                   <figure key={`${image.src}-${imageIndex}`} className="galleryItem">
-                    <img src={image.src} alt={image.caption || `Fotografija ${imageIndex + 1}`} loading="lazy" />
+                    <ReliableImage src={image.src} token={token} alt={image.caption || `Fotografija ${imageIndex + 1}`} loading="lazy" />
                     {image.caption ? <figcaption>{image.caption}</figcaption> : null}
                   </figure>
                 ))}
