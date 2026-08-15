@@ -5,6 +5,7 @@ import {
   BoundedCache,
   decodeJsonString,
   findBlockedKeyword,
+  isKlixHostedAsset,
   normalizeStoredState,
   normalizeText,
 } from '../klix-core.js'
@@ -39,6 +40,14 @@ test('gallery JSON strings decode escaped URLs', () => {
     decodeJsonString('https:\\/\\/example.test\\/image.jpg'),
     'https://example.test/image.jpg',
   )
+})
+
+test('Klix-hosted images use the authenticated proxy path', () => {
+  assert.equal(isKlixHostedAsset('https://static.klix.ba/media/image.jpg'), true)
+  assert.equal(isKlixHostedAsset('https://www.klix.ba/media/image.jpg'), true)
+  assert.equal(isKlixHostedAsset('https://klix.ba/media/image.jpg'), true)
+  assert.equal(isKlixHostedAsset('https://notklix.ba/media/image.jpg'), false)
+  assert.equal(isKlixHostedAsset('not a URL'), false)
 })
 
 test('bounded cache evicts the least recently used entry', () => {
