@@ -1,14 +1,28 @@
 {
   "id": "klix-filter",
   "name": "Klix Filter",
-  "version": "1.0.1",
-  "description": "Klix.ba reader with in-app articles, infinite scroll, and saved keyword filters",
+  "version": "1.1.0",
+  "description": "A focused Klix.ba reader with saved keyword filters, in-app articles, and photo galleries.",
+  "author": "hamzamerzic",
+  "license": "MIT",
+  "homepage": "https://github.com/hamzamerzic/klix-filter",
   "entry": "index.jsx",
-  "icon": "assets/klix-app-icon.png",
-  "offline_capable": true,
+  "icon": "icon.png",
+  "offline_capable": false,
+  "theme_color": "#e21c23",
+  "background_color": "#0b0b0c",
+  "display": "standalone",
   "permissions": {
     "cross_app_access": "none",
     "share_with_apps": "none",
     "chat_log_access": "none"
-  }
+  },
+  "runtime": {
+    "imports": [
+      "react",
+      "@openai/apps-sdk-ui/components/Icon"
+    ],
+    "esm_deps": []
+  },
+  "source_files": []
 }

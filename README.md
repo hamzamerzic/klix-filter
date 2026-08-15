@@ -1,18 +1,20 @@
 # Klix Filter
 
-Klix.ba reader for Mobius with in-app articles, infinite scroll, and saved keyword filters.
+A focused Klix.ba reader for Möbius. It keeps the latest and most-read feeds easy to scan, hides stories matching saved keywords, and opens articles without leaving the app.
 
-Install in Mobius with this manifest URL:
+## Highlights
 
-```text
-https://raw.githubusercontent.com/hamzamerzic/klix-filter/main/mobius.json
-```
+- Latest and most-read Klix.ba feeds
+- Saved title and article-text filters
+- In-app article reading with retained feed position
+- Photo galleries, video previews, and native Instagram cards
+- Responsive layouts for phone, tablet, and desktop
+- Clear loading, empty, error, and recovery states
 
-The app fetches Klix pages through the Mobius `/api/proxy` endpoint so it can parse feed and article pages without browser CORS failures. It is otherwise a single client-side `index.jsx` mini-app.
+## Install
 
-## Notes
+In Möbius, open **App Store → From URL** and paste:
 
-- Feed thumbnails stay stable while article pages can use larger hero images.
-- Duplicate feed entries retain ranking-page order while borrowing richer thumbnails from category pages; blocked image hosts retry through the authenticated Möbius proxy.
-- Article parsing supports galleries, Klix video embeds, and YouTube links converted through Klix's player.
-- Unsupported media shapes are recorded for later parser improvements.
+`https://raw.githubusercontent.com/hamzamerzic/klix-filter/main/mobius.json`
+
+Klix Filter requires a network connection because its news and media come from Klix.ba.
