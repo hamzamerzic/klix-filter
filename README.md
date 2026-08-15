@@ -18,3 +18,11 @@ In Möbius, open **App Store → From URL** and paste:
 `https://raw.githubusercontent.com/hamzamerzic/klix-filter/main/mobius.json`
 
 Klix Filter requires a network connection because its news and media come from Klix.ba.
+
+## Development
+
+Run the focused parser and state contracts with `npm test`, then validate the Möbius package with `validate-app.py` before publishing.
+
+## License
+
+MIT

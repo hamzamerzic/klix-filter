@@ -1,7 +1,7 @@
 {
   "id": "klix-filter",
   "name": "Klix Filter",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A focused Klix.ba reader with saved keyword filters, in-app articles, and photo galleries.",
   "author": "hamzamerzic",
   "license": "MIT",
@@ -24,5 +24,7 @@
     ],
     "esm_deps": []
   },
-  "source_files": []
+  "source_files": [
+    "klix-core.js"
+  ]
 }
