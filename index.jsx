@@ -16,6 +16,7 @@ import {
   DEFAULT_STATE,
   decodeJsonString,
   findBlockedKeyword,
+  isKlixHostedAsset,
   normalizeStoredState,
   normalizeText,
 } from './klix-core.js'
@@ -46,9 +47,9 @@ const CATEGORY_LABELS = {
   auto: 'Auto',
 }
 
-// The image proxy is only needed for hosts that reject a direct <img> request.
-// Keep successful data URLs for this app session so returning from the reader
-// does not turn the feed back into a row of fresh image downloads.
+// Klix's image hosts reject the app iframe's cross-site image request. Going
+// through the authenticated proxy immediately avoids a failed request before
+// the usable one, while external media still gets the faster direct path.
 const proxiedImageCache = new BoundedCache(48)
 const imageWarmCache = new BoundedCache(120)
 const instagramPostCache = new BoundedCache(24)
@@ -448,32 +449,39 @@ function getProxiedImage(src, token) {
   return cached.url ? Promise.resolve(cached.url) : cached.promise
 }
 
-function warmImage(src, token) {
+function decodeImage(src, priority = 'auto') {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => {
+      const decoded = image.decode ? image.decode().catch(() => {}) : Promise.resolve()
+      decoded.then(() => resolve(src))
+    }
+    image.onerror = () => reject(new Error('image failed to load'))
+    image.decoding = 'async'
+    image.fetchPriority = priority
+    image.src = src
+  })
+}
+
+function warmImage(src, token, priority = 'auto') {
   if (!src) return Promise.resolve('')
   if (proxiedImageCache.get(src)?.url) return Promise.resolve(proxiedImageCache.get(src).url)
   const existing = imageWarmCache.get(src)
-  if (existing) return existing
-  const promise = new Promise((resolve) => {
-    const image = new Image()
-    let done = false
-    const finish = (value) => {
-      if (done) return
-      done = true
-      resolve(value)
-    }
-    image.onload = () => {
-      const decoded = image.decode ? image.decode().catch(() => {}) : Promise.resolve()
-      decoded.then(() => finish(src))
-    }
-    image.onerror = () => {
-      getProxiedImage(src, token).then(finish).catch(() => finish(''))
-    }
-    image.decoding = 'async'
-    image.src = src
-  })
-  imageWarmCache.set(src, promise)
-  promise.then((value) => { if (!value) imageWarmCache.delete(src) })
-  return promise
+  if (existing) return existing.value ? Promise.resolve(existing.value) : existing.promise
+
+  const entry = { value: '', promise: null }
+  const proxyAndDecode = () => getProxiedImage(src, token).then((url) => decodeImage(url, priority))
+  entry.promise = (isKlixHostedAsset(src)
+    ? proxyAndDecode()
+    : decodeImage(src, priority).catch(proxyAndDecode))
+    .catch(() => '')
+    .then((value) => {
+      entry.value = value
+      if (!value) imageWarmCache.delete(src)
+      return value
+    })
+  imageWarmCache.set(src, entry)
+  return entry.promise
 }
 
 function preloadWindow(promise, waitMs = 1800) {
@@ -537,16 +545,27 @@ async function warmArticleContent(article, token) {
   media.slice(5, 12).forEach((src) => { void warmImage(src, token) })
 }
 
-function ReliableImage({ src, token, alt = '', className = '', loading, fallback = null }) {
-  const [displaySrc, setDisplaySrc] = useState(() => proxiedImageCache.get(src)?.url || src)
+function ReliableImage({ src, token, alt = '', className = '', loading, fetchPriority = 'auto', fallback = null }) {
+  const initialWarm = imageWarmCache.get(src)?.value || proxiedImageCache.get(src)?.url || ''
+  const [displaySrc, setDisplaySrc] = useState(initialWarm)
   const [failed, setFailed] = useState(false)
   const proxyTriedRef = useRef(false)
 
   useEffect(() => {
+    let cancelled = false
     proxyTriedRef.current = false
     setFailed(false)
-    setDisplaySrc(proxiedImageCache.get(src)?.url || src)
-  }, [src])
+    const cached = imageWarmCache.get(src)?.value || proxiedImageCache.get(src)?.url || ''
+    setDisplaySrc(cached)
+    if (!cached) {
+      warmImage(src, token, fetchPriority).then((next) => {
+        if (cancelled) return
+        if (next) setDisplaySrc(next)
+        else setFailed(true)
+      })
+    }
+    return () => { cancelled = true }
+  }, [src, token, fetchPriority])
 
   async function retryThroughMobius() {
     if (!src || proxyTriedRef.current) {
@@ -554,15 +573,19 @@ function ReliableImage({ src, token, alt = '', className = '', loading, fallback
       return
     }
     proxyTriedRef.current = true
+    setDisplaySrc('')
     try {
-      setDisplaySrc(await getProxiedImage(src, token))
+      const next = await getProxiedImage(src, token)
+      await decodeImage(next, fetchPriority)
+      setDisplaySrc(next)
     } catch {
       setFailed(true)
     }
   }
 
   if (!src || failed) return fallback
-  return <img className={className} src={displaySrc} alt={alt} loading={loading} onError={retryThroughMobius} />
+  if (!displaySrc) return <div className={`${className} imagePending`.trim()} aria-hidden="true"></div>
+  return <img className={className} src={displaySrc} alt={alt} loading={loading} decoding="async" fetchPriority={fetchPriority} onError={retryThroughMobius} />
 }
 
 async function enrichArticle(article, token) {
@@ -644,6 +667,11 @@ export default function KlixFilter({ appId, token }) {
           id: `${source.key}-${index + 1}`,
           rank: index + 1,
         }))
+        // Start the first viewport's images while the other feed is still
+        // loading, instead of waiting for every headline request to settle.
+        ranked.slice(0, 3).forEach((article, index) => {
+          if (article.image) void warmImage(article.image, token, index === 0 ? 'high' : 'auto')
+        })
         return [source.key, ranked]
       }))
       if (!results.some(([, next]) => next.length > 0)) {
@@ -1009,7 +1037,7 @@ export default function KlixFilter({ appId, token }) {
 
             {hasArticles ? (
               <main className={refreshing ? 'feed isRefreshing' : 'feed'}>
-                {displayedVisible.map((article, index) => <ArticleCard key={article.url} article={article} lead={index === 0} onOpen={openArticle} token={token} />)}
+                {displayedVisible.map((article, index) => <ArticleCard key={article.url} article={article} lead={index === 0} priority={index < 3} onOpen={openArticle} token={token} />)}
                 {allArticlesHidden ? (
                   <div className="emptyState filteredEmpty">
                     <div><strong>Sve vijesti su skrivene</strong><p>Prilagodi filtere da ponovo vidiš članke.</p></div>
@@ -1053,7 +1081,7 @@ export default function KlixFilter({ appId, token }) {
   )
 }
 
-function ArticleCard({ article, lead, onOpen, token }) {
+function ArticleCard({ article, lead, priority, onOpen, token }) {
   return (
     <article
       className={lead ? 'card leadCard' : 'card'}
@@ -1069,7 +1097,8 @@ function ArticleCard({ article, lead, onOpen, token }) {
             src={article.image}
             token={token}
             alt=""
-            loading="lazy"
+            loading={priority ? 'eager' : 'lazy'}
+            fetchPriority={lead ? 'high' : 'auto'}
             fallback={<div className="thumb fallback" aria-hidden="true"></div>}
           />
         ) : <div className="thumb fallback" aria-hidden="true"></div>}
@@ -1623,6 +1652,19 @@ const css = `
     border-radius: 8px;
     border: 0;
   }
+  .imagePending {
+    position: relative;
+    overflow: hidden;
+    background: var(--surface2);
+  }
+  .imagePending::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 24%, rgba(255,255,255,.1) 46%, transparent 68%);
+    transform: translateX(-100%);
+    animation: media-shimmer 1.15s ease-in-out infinite;
+  }
   .thumb.fallback {
     background:
       linear-gradient(135deg, rgba(226, 28, 35, .92), rgba(226, 28, 35, .55)),
@@ -1830,13 +1872,14 @@ const css = `
     margin: 18px 0;
     padding: 0;
   }
-  .inlineFigure img {
+  .inlineFigure img, .inlineFigure .imagePending {
     width: 100%;
-    height: auto;
+    aspect-ratio: 16 / 10;
     display: block;
     border-radius: 10px;
     background: var(--surface2);
   }
+  .inlineFigure img { height: auto; aspect-ratio: auto; }
   .inlineFigure figcaption {
     margin-top: 8px;
     color: var(--muted);
@@ -1886,7 +1929,7 @@ const css = `
     scroll-snap-align: start;
     text-align: left;
   }
-  .galleryItem img {
+  .galleryItem img, .galleryItem .imagePending {
     width: 100%;
     aspect-ratio: 4 / 3;
     object-fit: cover;

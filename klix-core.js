@@ -45,6 +45,15 @@ export function decodeJsonString(value) {
   }
 }
 
+export function isKlixHostedAsset(value) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase()
+    return hostname === 'klix.ba' || hostname.endsWith('.klix.ba')
+  } catch {
+    return false
+  }
+}
+
 export function findBlockedKeyword(article, keywords) {
   const haystack = normalizeText(
     `${article.title} ${article.category} ${article.lead || ''} ${article.bodyText || ''}`,
